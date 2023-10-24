@@ -22,11 +22,48 @@ from sd_meh.rebasin import (
 )
 
 logging.getLogger("sd_meh").addHandler(logging.NullHandler())
+
 MAX_TOKENS = 77
-NUM_INPUT_BLOCKS = 12
-NUM_MID_BLOCK = 1
-NUM_OUTPUT_BLOCKS = 12
-NUM_TOTAL_BLOCKS = NUM_INPUT_BLOCKS + NUM_MID_BLOCK + NUM_OUTPUT_BLOCKS
+
+
+class WeightClass:
+    def __init__(self, model_a, weights, bases):
+        self.SDXL = True if "embedder" in model_a.keys() else False
+        self.NUM_INPUT_BLOCKS = 12 if not self.SDXL else 9
+        self.NUM_MID_BLOCK = 1
+        self.NUM_OUTPUT_BLOCKS = 12 if not self.SDXL else 9
+        self.NUM_TOTAL_BLOCKS = self.NUM_INPUT_BLOCKS + self.NUM_MID_BLOCK + self.NUM_OUTPUT_BLOCKS
+
+    def __call__(self, key):
+        current_bases = 0
+        if "model" in key:
+            current_bases = bases
+
+            if "model.diffusion_model." in key:
+                weight_index = -1
+
+                re_inp = re.compile(r"\.input_blocks\.(\d+)\.")  # 12
+                re_mid = re.compile(r"\.middle_block\.(\d+)\.")  # 1
+                re_out = re.compile(r"\.output_blocks\.(\d+)\.")  # 12
+
+                if "time_embed" in key:
+                    weight_index = 0  # before input blocks
+                elif ".out." in key:
+                    weight_index = self.NUM_TOTAL_BLOCKS - 1  # after output blocks
+                elif m := re_inp.search(key):
+                    weight_index = int(m.groups()[0])
+                elif re_mid.search(key):
+                    weight_index = self.NUM_INPUT_BLOCKS
+                elif m := re_out.search(key):
+                    weight_index = self.NUM_INPUT_BLOCKS + self.NUM_MID_BLOCK + int(m.groups()[0])
+
+                if weight_index >= NUM_TOTAL_BLOCKS:
+                    raise ValueError(f"illegal block index {key}")
+
+                if weight_index >= 0:
+                    current_bases = {k: w[weight_index] for k, w in weights.items()}
+        return current_bases
+
 
 KEY_POSITION_IDS = ".".join(
     [
@@ -145,11 +182,11 @@ def merge_models(
     thetas = load_thetas(models, prune, device, precision)
 
     logging.info(f"start merging with {merge_mode} method")
+    weight_matcher = WeightClass(thetas["model_a"], weights, bases)
     if re_basin:
         merged = rebasin_merge(
             thetas,
-            weights,
-            bases,
+            weight_matcher,
             merge_mode,
             precision=precision,
             weights_clip=weights_clip,
@@ -161,8 +198,7 @@ def merge_models(
     else:
         merged = simple_merge(
             thetas,
-            weights,
-            bases,
+            weight_matcher,
             merge_mode,
             precision=precision,
             weights_clip=weights_clip,
@@ -213,8 +249,7 @@ def un_prune_model(
 
 def simple_merge(
     thetas: Dict[str, Dict],
-    weights: Dict,
-    bases: Dict,
+    weight_matcher: WeightClass,
     merge_mode: str,
     precision: int = 16,
     weights_clip: bool = False,
@@ -261,8 +296,7 @@ def simple_merge(
 
 def rebasin_merge(
     thetas: Dict[str, os.PathLike | str],
-    weights: Dict,
-    bases: Dict,
+    weight_matcher: WeightClass,
     merge_mode: str,
     precision: int = 16,
     weights_clip: bool = False,
@@ -360,8 +394,7 @@ def simple_merge_key(progress, key, thetas, *args, **kwargs):
 def merge_key(
     key: str,
     thetas: Dict,
-    weights: Dict,
-    bases: Dict,
+    weight_matcher: WeightClass,
     merge_mode: str,
     precision: int = 16,
     weights_clip: bool = False,
@@ -378,33 +411,8 @@ def merge_key(
         if key not in theta.keys():
             return
 
-    if "model" in key:
-        current_bases = bases
 
-        if "model.diffusion_model." in key:
-            weight_index = -1
-
-            re_inp = re.compile(r"\.input_blocks\.(\d+)\.")  # 12
-            re_mid = re.compile(r"\.middle_block\.(\d+)\.")  # 1
-            re_out = re.compile(r"\.output_blocks\.(\d+)\.")  # 12
-
-            if "time_embed" in key:
-                weight_index = 0  # before input blocks
-            elif ".out." in key:
-                weight_index = NUM_TOTAL_BLOCKS - 1  # after output blocks
-            elif m := re_inp.search(key):
-                weight_index = int(m.groups()[0])
-            elif re_mid.search(key):
-                weight_index = NUM_INPUT_BLOCKS
-            elif m := re_out.search(key):
-                weight_index = NUM_INPUT_BLOCKS + NUM_MID_BLOCK + int(m.groups()[0])
-
-            if weight_index >= NUM_TOTAL_BLOCKS:
-                raise ValueError(f"illegal block index {key}")
-
-            if weight_index >= 0:
-                current_bases = {k: w[weight_index] for k, w in weights.items()}
-
+        current_bases = weight_matcher(key)
         try:
             merge_method = getattr(merge_methods, merge_mode)
         except AttributeError as e:
