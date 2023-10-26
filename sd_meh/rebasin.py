@@ -2,8 +2,7 @@
 import logging
 from collections import defaultdict
 from random import shuffle
-from typing import Dict, NamedTuple, Tuple
-
+from typing import NamedTuple
 import torch
 from scipy.optimize import linear_sum_assignment
 
@@ -16,36 +15,6 @@ SPECIAL_KEYS = [
     "model.diffusion_model.out.0.weight",
     "model.diffusion_model.out.0.bias",
 ]
-
-
-def step_weights_and_bases(
-    weights: Dict, bases: Dict, it: int = 0, iterations: int = 1
-) -> Tuple[Dict, Dict]:
-    new_weights = {
-        gl: [
-            1 - (1 - (1 + it) * v / iterations) / (1 - it * v / iterations)
-            if it > 0
-            else v / iterations
-            for v in w
-        ]
-        for gl, w in weights.items()
-    }
-
-    new_bases = {
-        k: 1 - (1 - (1 + it) * v / iterations) / (1 - it * v / iterations)
-        if it > 0
-        else v / iterations
-        for k, v in bases.items()
-    }
-
-    return new_weights, new_bases
-
-
-def flatten_params(model):
-    return model["state_dict"]
-
-
-rngmix = lambda rng, x: random.fold_in(rng, hash(x))
 
 
 class PermutationSpec(NamedTuple):
@@ -2204,7 +2173,7 @@ def update_model_a(ps: PermutationSpec, perm, model_a, new_alpha):
                 ps, perm, k, model_a
             )
             model_a[k] = model_a[k] * (1 - new_alpha) + new_alpha * perm_params
-        except RuntimeError: # dealing with pix2pix and inpainting models
+        except RuntimeError:  # dealing with pix2pix and inpainting models
             continue
     return model_a
 
@@ -2317,4 +2286,4 @@ def weight_matching(
             break
 
     average = linear_sum / number if number > 0 else 0
-    return (perm, average)
+    return perm, average

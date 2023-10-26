@@ -1,7 +1,7 @@
 import gc
 import logging
 import os
-import re
+# import re
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
@@ -12,11 +12,11 @@ import torch
 from tqdm import tqdm
 
 from sd_meh import merge_methods
+from sd_meh.utils import WeightClass
 from sd_meh.model import SDModel
 from sd_meh.rebasin import (
     apply_permutation,
     sdunet_permutation_spec,
-    step_weights_and_bases,
     update_model_a,
     weight_matching,
 )
@@ -24,45 +24,6 @@ from sd_meh.rebasin import (
 logging.getLogger("sd_meh").addHandler(logging.NullHandler())
 
 MAX_TOKENS = 77
-
-
-class WeightClass:
-    def __init__(self, model_a, weights, bases):
-        self.SDXL = True if "embedder" in model_a.keys() else False
-        self.NUM_INPUT_BLOCKS = 12 if not self.SDXL else 9
-        self.NUM_MID_BLOCK = 1
-        self.NUM_OUTPUT_BLOCKS = 12 if not self.SDXL else 9
-        self.NUM_TOTAL_BLOCKS = self.NUM_INPUT_BLOCKS + self.NUM_MID_BLOCK + self.NUM_OUTPUT_BLOCKS
-
-    def __call__(self, key):
-        current_bases = 0
-        if "model" in key:
-            current_bases = bases
-
-            if "model.diffusion_model." in key:
-                weight_index = -1
-
-                re_inp = re.compile(r"\.input_blocks\.(\d+)\.")  # 12
-                re_mid = re.compile(r"\.middle_block\.(\d+)\.")  # 1
-                re_out = re.compile(r"\.output_blocks\.(\d+)\.")  # 12
-
-                if "time_embed" in key:
-                    weight_index = 0  # before input blocks
-                elif ".out." in key:
-                    weight_index = self.NUM_TOTAL_BLOCKS - 1  # after output blocks
-                elif m := re_inp.search(key):
-                    weight_index = int(m.groups()[0])
-                elif re_mid.search(key):
-                    weight_index = self.NUM_INPUT_BLOCKS
-                elif m := re_out.search(key):
-                    weight_index = self.NUM_INPUT_BLOCKS + self.NUM_MID_BLOCK + int(m.groups()[0])
-
-                if weight_index >= NUM_TOTAL_BLOCKS:
-                    raise ValueError(f"illegal block index {key}")
-
-                if weight_index >= 0:
-                    current_bases = {k: w[weight_index] for k, w in weights.items()}
-        return current_bases
 
 
 KEY_POSITION_IDS = ".".join(
@@ -156,7 +117,7 @@ def load_thetas(
     if device == "cuda":
         for model_key, model in thetas.items():
             for key, block in model.items():
-                if precision == 16:
+                if precision == "fp16":
                     thetas[model_key].update({key: block.to(device).half()})
                 else:
                     thetas[model_key].update({key: block.to(device)})
@@ -167,10 +128,8 @@ def load_thetas(
 
 def merge_models(
     models: Dict[str, os.PathLike | str],
-    weights: Dict,
-    bases: Dict,
     merge_mode: str,
-    precision: int = 16,
+    precision: str = "full",
     weights_clip: bool = False,
     re_basin: bool = False,
     iterations: int = 1,
@@ -178,11 +137,12 @@ def merge_models(
     work_device: Optional[str] = None,
     prune: bool = False,
     threads: int = 1,
+    **kwargs,
 ) -> Dict:
     thetas = load_thetas(models, prune, device, precision)
 
     logging.info(f"start merging with {merge_mode} method")
-    weight_matcher = WeightClass(thetas["model_a"], weights, bases)
+    weight_matcher = WeightClass(thetas["model_a"], **kwargs)
     if re_basin:
         merged = rebasin_merge(
             thetas,
@@ -266,8 +226,7 @@ def simple_merge(
                     progress,
                     key,
                     thetas,
-                    weights,
-                    bases,
+                    weight_matcher
                     merge_mode,
                     precision,
                     weights_clip,
@@ -314,12 +273,8 @@ def rebasin_merge(
     for it in range(iterations):
         logging.info(f"Rebasin iteration {it}")
         log_vram(f"{it} iteration start")
-        new_weights, new_bases = step_weights_and_bases(
-            weights,
-            bases,
-            it,
-            iterations,
-        )
+        new_weights = weight_matcher.step_weights_and_bases(it)
+        new_bases = weight_matcher.step_weights_and_bases(it)
         log_vram("weights & bases, before simple merge")
 
         # normal block merge we already know and love
@@ -411,7 +366,6 @@ def merge_key(
         if key not in theta.keys():
             return
 
-
         current_bases = weight_matcher(key)
         try:
             merge_method = getattr(merge_methods, merge_mode)
@@ -420,7 +374,7 @@ def merge_key(
 
         merge_args = get_merge_method_args(current_bases, thetas, key, work_device)
 
-        # dealing wiht pix2pix and inpainting models
+        # dealing with pix2pix and inpainting models
         if (a_size := merge_args["a"].size()) != (b_size := merge_args["b"].size()):
             if a_size[1] > b_size[1]:
                 merged_key = merge_args["a"]

@@ -1,9 +1,10 @@
 import inspect
-import logging
-
+# import logging
+import re
+# from typing import Dict, Tuple
 from sd_meh import merge_methods
-from sd_meh.merge import NUM_TOTAL_BLOCKS
 from sd_meh.presets import BLOCK_WEIGHTS_PRESETS
+
 
 MERGE_METHODS = dict(inspect.getmembers(merge_methods, inspect.isfunction))
 BETA_METHODS = [
@@ -13,114 +14,95 @@ BETA_METHODS = [
 ]
 
 
-def compute_weights(weights, base):
-    if not weights:
-        return [base] * NUM_TOTAL_BLOCKS
-
-    if "," not in weights:
-        return weights
-
-    w_alpha = list(map(float, weights.split(",")))
-    if len(w_alpha) == NUM_TOTAL_BLOCKS:
-        return w_alpha
+def interpolate(values, interp_lambda):
+    interpolated = []
+    for i in range(len(values[0])):
+        interpolated.append((1 - interp_lambda) * values[0][i] + interp_lambda * values[1][i])
+    return interpolated
 
 
-def assemble_weights_and_bases(preset, weights, base, greek_letter):
-    logging.info(f"Assembling {greek_letter} w&b")
-    if preset:
-        logging.info(f"Using {preset} preset")
-        base, *weights = BLOCK_WEIGHTS_PRESETS[preset]
-    bases = {greek_letter: base}
-    weights = {greek_letter: compute_weights(weights, base)}
+class WeightClass:
+    def __init__(self,
+                 model_a,
+                 **kwargs,
+                 ):
+        self.SDXL = True if "embedder" in model_a.keys() else False
+        self.NUM_INPUT_BLOCKS = 12 if not self.SDXL else 9
+        self.NUM_MID_BLOCK = 1
+        self.NUM_OUTPUT_BLOCKS = 12 if not self.SDXL else 9
+        self.NUM_TOTAL_BLOCKS = self.NUM_INPUT_BLOCKS + self.NUM_MID_BLOCK + self.NUM_OUTPUT_BLOCKS
+        self.iterations = kwargs.get("iterations", 1)
+        self.ratioDict = {}
+        for key, value in kwargs.items():
+            self.ratioDict[key.lower()] = value if isinstance(value, list) or (key.lower() != "alpha" and key.lower() != "beta") else [value]
 
-    logging.info(f"base_{greek_letter}: {bases[greek_letter]}")
-    logging.info(f"{greek_letter} weights: {weights[greek_letter]}")
+        for key, value in self.ratioDict.items():
+            if key in ["alpha", "beta"]:
+                for i, v in enumerate(value):
+                    if isinstance(v, str) and v.upper() in BLOCK_WEIGHTS_PRESETS.keys():
+                        value[i] = BLOCK_WEIGHTS_PRESETS[v.upper()]
+                    else:
+                        value[i] = [float(x) for x in v.split(",")] if isinstance(v, str) else v
+                        if not isinstance(value[i], list):
+                            value[i] = [value[i]] * (self.NUM_TOTAL_BLOCKS + 1)
+                if len(value) > 1 and isinstance(value[0], list):
+                    self.ratioDict[key] = interpolate(value, self.ratioDict.get(key+"_lambda", 0))
+                else:
+                    self.ratioDict[key] = self.ratioDict[key][0]
 
-    return weights, bases
+        print(self.ratioDict)
+
+    def __call__(self, key, it=0):
+        current_bases = {}
+        if self.ratioDict.get("alpha", None):
+            current_bases["alpha"] = self.step_weights_and_bases(self.ratioDict["alpha"], it)
+        if self.ratioDict.get("beta", None):
+            current_bases["beta"] = self.step_weights_and_bases(self.ratioDict["beta"], it)
 
 
-def interpolate_presets(
-    weights, bases, weights_b, bases_b, greek_letter, presets_lambda
-):
-    logging.info(f"Interpolating {greek_letter} w&b")
-    for i, e in enumerate(weights[greek_letter]):
-        weights[greek_letter][i] = (
-            1 - presets_lambda
-        ) * e + presets_lambda * weights_b[greek_letter][i]
+        if "model" in key:
 
-    bases[greek_letter] = (1 - presets_lambda) * bases[
-        greek_letter
-    ] + presets_lambda * bases_b[greek_letter]
+            if "model.diffusion_model." in key:
+                weight_index = -1
 
-    logging.info(f"Interpolated base_{greek_letter}: {bases[greek_letter]}")
-    logging.info(f"Interpolated {greek_letter} weights: {weights[greek_letter]}")
+                re_inp = re.compile(r"\.input_blocks\.(\d+)\.")  # 12
+                re_mid = re.compile(r"\.middle_block\.(\d+)\.")  # 1
+                re_out = re.compile(r"\.output_blocks\.(\d+)\.")  # 12
 
-    return weights, bases
+                if "time_embed" in key:
+                    weight_index = 0  # before input blocks
+                elif ".out." in key:
+                    weight_index = self.NUM_TOTAL_BLOCKS - 1  # after output blocks
+                elif m := re_inp.search(key):
+                    weight_index = int(m.groups()[0])
+                elif re_mid.search(key):
+                    weight_index = self.NUM_INPUT_BLOCKS
+                elif m := re_out.search(key):
+                    weight_index = self.NUM_INPUT_BLOCKS + self.NUM_MID_BLOCK + int(m.groups()[0])
+
+                if weight_index >= self.NUM_TOTAL_BLOCKS:
+                    raise ValueError(f"illegal block index {key}")
+
+                if weight_index >= 0:
+                    current_bases = {k: w[weight_index] for k, w in current_bases.items()}
+        return current_bases
 
 
-def weights_and_bases(
-    merge_mode,
-    weights_alpha,
-    base_alpha,
-    block_weights_preset_alpha,
-    weights_beta,
-    base_beta,
-    block_weights_preset_beta,
-    block_weights_preset_alpha_b,
-    block_weights_preset_beta_b,
-    presets_alpha_lambda,
-    presets_beta_lambda,
-):
-    weights, bases = assemble_weights_and_bases(
-        block_weights_preset_alpha,
-        weights_alpha,
-        base_alpha,
-        "alpha",
-    )
+    def step_weights_and_bases(self,
+                               ratio,
+                               it: int = 0,
+                               ):
+        # if ratio is None:
+        #     return None
+        new_ratio = [
+            1 - (1 - (1 + it) * v / self.iterations) / (1 - it * v / self.iterations)
+            if it > 0
+            else v / self.iterations
+            for v in ratio
+            ]
 
-    if block_weights_preset_alpha_b:
-        logging.info("Computing w&b for alpha interpolation")
-        weights_b, bases_b = assemble_weights_and_bases(
-            block_weights_preset_alpha_b,
-            None,
-            None,
-            "alpha",
-        )
-        weights, bases = interpolate_presets(
-            weights,
-            bases,
-            weights_b,
-            bases_b,
-            "alpha",
-            presets_alpha_lambda,
-        )
+        return new_ratio
 
-    if merge_mode in BETA_METHODS:
-        weights_beta, bases_beta = assemble_weights_and_bases(
-            block_weights_preset_beta,
-            weights_beta,
-            base_beta,
-            "beta",
-        )
 
-        if block_weights_preset_beta_b:
-            logging.info("Computing w&b for beta interpolation")
-            weights_b, bases_b = assemble_weights_and_bases(
-                block_weights_preset_beta_b,
-                None,
-                None,
-                "beta",
-            )
-            weights, bases = interpolate_presets(
-                weights,
-                bases,
-                weights_b,
-                bases_b,
-                "beta",
-                presets_beta_lambda,
-            )
-
-        weights |= weights_beta
-        bases |= bases_beta
-
-    return weights, bases
+w = WeightClass({}, alpha=["grad_v", "grad_a"], alpha_lambda=0.2, beta=["grad_v", "grad_a"], beta_lambda=0.4)#, iterations=10)
+print(w("model.diffusion_model.input_blocks.2.1", it=0))
