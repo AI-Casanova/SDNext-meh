@@ -1,10 +1,8 @@
 import inspect
 # import logging
 import re
-# from typing import Dict, Tuple
 from sd_meh import merge_methods
 from sd_meh.presets import BLOCK_WEIGHTS_PRESETS
-
 
 MERGE_METHODS = dict(inspect.getmembers(merge_methods, inspect.isfunction))
 BETA_METHODS = [
@@ -34,7 +32,10 @@ class WeightClass:
         self.iterations = kwargs.get("iterations", 1)
         self.ratioDict = {}
         for key, value in kwargs.items():
-            self.ratioDict[key.lower()] = value if isinstance(value, list) or (key.lower() != "alpha" and key.lower() != "beta") else [value]
+            if isinstance(value, list) or (key.lower() not in ["alpha", "beta"]):
+                self.ratioDict[key.lower()] = value
+            else:
+                self.ratioDict[key.lower()] = [value]
 
         for key, value in self.ratioDict.items():
             if key in ["alpha", "beta"]:
@@ -46,7 +47,7 @@ class WeightClass:
                         if not isinstance(value[i], list):
                             value[i] = [value[i]] * (self.NUM_TOTAL_BLOCKS + 1)
                 if len(value) > 1 and isinstance(value[0], list):
-                    self.ratioDict[key] = interpolate(value, self.ratioDict.get(key+"_lambda", 0))
+                    self.ratioDict[key] = interpolate(value, self.ratioDict.get(key + "_lambda", 0))
                 else:
                     self.ratioDict[key] = self.ratioDict[key][0]
 
@@ -58,7 +59,6 @@ class WeightClass:
             current_bases["alpha"] = self.step_weights_and_bases(self.ratioDict["alpha"], it)
         if self.ratioDict.get("beta", None):
             current_bases["beta"] = self.step_weights_and_bases(self.ratioDict["beta"], it)
-
 
         if "model" in key:
 
@@ -87,7 +87,6 @@ class WeightClass:
                     current_bases = {k: w[weight_index] for k, w in current_bases.items()}
         return current_bases
 
-
     def step_weights_and_bases(self,
                                ratio,
                                it: int = 0,
@@ -99,10 +98,14 @@ class WeightClass:
             if it > 0
             else v / self.iterations
             for v in ratio
-            ]
+        ]
 
         return new_ratio
 
 
-w = WeightClass({}, alpha=["grad_v", "grad_a"], alpha_lambda=0.2, beta=["grad_v", "grad_a"], beta_lambda=0.4)#, iterations=10)
-print(w("model.diffusion_model.input_blocks.2.1", it=0))
+wc = WeightClass({},
+                 alpha=["grad_v", "grad_a"],
+                 alpha_lambda=0.2,
+                 beta=["grad_v", "grad_a"],
+                 beta_lambda=0.4)  # iterations=10)
+print(wc("model.diffusion_model.input_blocks.2.1", it=0))

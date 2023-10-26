@@ -1,7 +1,6 @@
 import gc
 import logging
 import os
-# import re
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
@@ -106,7 +105,7 @@ def load_thetas(
     models: Dict[str, os.PathLike | str],
     prune: bool,
     device: str,
-    precision: int,
+    precision: str,
 ) -> Dict:
     log_vram("before loading models")
     if prune:
@@ -176,7 +175,7 @@ def un_prune_model(
     models: Dict,
     device: str,
     prune: bool,
-    precision: int,
+    precision: str,
 ) -> Dict:
     if prune:
         logging.info("Un-pruning merged model")
@@ -189,7 +188,7 @@ def un_prune_model(
                 continue
             if "model" in key and key not in merged.keys():
                 merged.update({key: original_a[key]})
-                if precision == 16:
+                if precision == "fp16":
                     merged.update({key: merged[key].half()})
         del original_a
         gc.collect()
@@ -200,7 +199,7 @@ def un_prune_model(
                 continue
             if "model" in key and key not in merged.keys():
                 merged.update({key: original_b[key]})
-                if precision == 16:
+                if precision == "fp16":
                     merged.update({key: merged[key].half()})
         del original_b
 
@@ -211,7 +210,7 @@ def simple_merge(
     thetas: Dict[str, Dict],
     weight_matcher: WeightClass,
     merge_mode: str,
-    precision: int = 16,
+    precision: str = "fp16",
     weights_clip: bool = False,
     device: str = "cpu",
     work_device: Optional[str] = None,
@@ -226,7 +225,7 @@ def simple_merge(
                     progress,
                     key,
                     thetas,
-                    weight_matcher
+                    weight_matcher,
                     merge_mode,
                     precision,
                     weights_clip,
@@ -257,7 +256,7 @@ def rebasin_merge(
     thetas: Dict[str, os.PathLike | str],
     weight_matcher: WeightClass,
     merge_mode: str,
-    precision: int = 16,
+    precision: str = "fp16",
     weights_clip: bool = False,
     iterations: int = 1,
     device="cpu",
