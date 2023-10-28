@@ -10,6 +10,11 @@ BETA_METHODS = [
     for name, fn in MERGE_METHODS.items()
     if "beta" in inspect.getfullargspec(fn)[0]
 ]
+TRIPLE_METHODS = [
+    name
+    for name, fn in MERGE_METHODS.items()
+    if "c" in inspect.getfullargspec(fn)[0]
+]
 
 
 def interpolate(values, interp_lambda):
