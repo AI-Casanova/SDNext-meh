@@ -60,6 +60,7 @@ class WeightClass:
         if self.ratioDict.get("beta", None):
             current_bases["beta"] = self.step_weights_and_bases(self.ratioDict["beta"], it)
 
+        weight_index = 0
         if "model" in key:
 
             if "model.diffusion_model." in key:
@@ -83,8 +84,7 @@ class WeightClass:
                 if weight_index >= self.NUM_TOTAL_BLOCKS:
                     raise ValueError(f"illegal block index {key}")
 
-                if weight_index >= 0:
-                    current_bases = {k: w[weight_index] for k, w in current_bases.items()}
+        current_bases = {k: w[weight_index] for k, w in current_bases.items()}
         return current_bases
 
     def step_weights_and_bases(self,
@@ -101,11 +101,3 @@ class WeightClass:
         ]
 
         return new_ratio
-
-
-wc = WeightClass({},
-                 alpha=["grad_v", "grad_a"],
-                 alpha_lambda=0.2,
-                 beta=["grad_v", "grad_a"],
-                 beta_lambda=0.4)  # iterations=10)
-print(wc("model.diffusion_model.input_blocks.2.1", it=0))
