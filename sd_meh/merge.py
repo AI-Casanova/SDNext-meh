@@ -278,7 +278,7 @@ def rebasin_merge(
         # normal block merge we already know and love
         thetas["model_a"] = simple_merge(
             thetas,
-            weight_matcher
+            weight_matcher,
             merge_mode,
             precision,
             False,
