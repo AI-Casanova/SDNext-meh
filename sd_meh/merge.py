@@ -268,19 +268,17 @@ def rebasin_merge(
     model_a = thetas["model_a"].clone()
     perm_spec = sdunet_permutation_spec()
 
-    logging.info("Init rebasin iterations")
+    print("Init rebasin iterations")
     for it in range(iterations):
-        logging.info(f"Rebasin iteration {it}")
+        print(f"Rebasin iteration {it}")
         log_vram(f"{it} iteration start")
-        new_weights = weight_matcher.step_weights_and_bases(it)
-        new_bases = weight_matcher.step_weights_and_bases(it)
+        weight_matcher.set_it(it)
         log_vram("weights & bases, before simple merge")
 
         # normal block merge we already know and love
         thetas["model_a"] = simple_merge(
             thetas,
-            new_weights,
-            new_bases,
+            weight_matcher
             merge_mode,
             precision,
             False,

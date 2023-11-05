@@ -30,12 +30,14 @@ class WeightClass:
                  model_a,
                  **kwargs,
                  ):
-        self.SDXL = True if "embedder" in model_a.keys() else False
+        self.SDXL = True if "model.diffusion_model.middle_block.1.transformer_blocks.9.norm3.weight" in model_a.keys() else False
         self.NUM_INPUT_BLOCKS = 12 if not self.SDXL else 9
         self.NUM_MID_BLOCK = 1
         self.NUM_OUTPUT_BLOCKS = 12 if not self.SDXL else 9
         self.NUM_TOTAL_BLOCKS = self.NUM_INPUT_BLOCKS + self.NUM_MID_BLOCK + self.NUM_OUTPUT_BLOCKS
         self.iterations = kwargs.get("iterations", 1)
+        self.it = 0
+        self.re_basin = kwargs.get("re_basin", False)
         self.ratioDict = {}
         for key, value in kwargs.items():
             if isinstance(value, list) or (key.lower() not in ["alpha", "beta"]):
@@ -90,20 +92,24 @@ class WeightClass:
                     raise ValueError(f"illegal block index {key}")
 
         current_bases = {k: w[weight_index] for k, w in current_bases.items()}
+        if self.re_basin:
+            current_bases = self.step_weights_and_bases(current_bases,self.it)
         return current_bases
 
     def step_weights_and_bases(self,
                                ratio,
                                it: int = 0,
                                ):
-        # if ratio is None:
-        #     return None
-        new_ratio = [
+        new_ratio = {
+            k:
             1 - (1 - (1 + it) * v / self.iterations) / (1 - it * v / self.iterations)
             if it > 0
             else v / self.iterations
-            for v in ratio
-        ]
+            for k, v in ratio.items()
+        }
 
         return new_ratio
 
+    def set_it(self, it):
+        self.it = it
+        return
