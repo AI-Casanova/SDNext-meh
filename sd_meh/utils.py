@@ -2,8 +2,9 @@ import inspect
 # import logging
 import re
 from sd_meh import merge_methods
-from sd_meh.presets import BLOCK_WEIGHTS_PRESETS
+from sd_meh.presets import BLOCK_WEIGHTS_PRESETS, SDXL_BLOCK_WEIGHTS_PRESETS
 
+BLOCK_WEIGHTS_PRESETS |= SDXL_BLOCK_WEIGHTS_PRESETS
 MERGE_METHODS = dict(inspect.getmembers(merge_methods, inspect.isfunction))
 BETA_METHODS = [
     name
@@ -56,7 +57,6 @@ class WeightClass:
                 else:
                     self.ratioDict[key] = self.ratioDict[key][0]
 
-        print(self.ratioDict)
 
     def __call__(self, key, it=0):
         current_bases = {}
@@ -106,3 +106,4 @@ class WeightClass:
         ]
 
         return new_ratio
+
